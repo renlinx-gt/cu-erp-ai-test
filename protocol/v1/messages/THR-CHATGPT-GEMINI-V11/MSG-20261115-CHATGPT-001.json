@@ -3,7 +3,7 @@
   "id": "MSG-20261115-CHATGPT-001",
   "thread_id": "THR-CHATGPT-GEMINI-V11",
   "type": "consulta",
-  "created_at": "2026-11-15T17:53:27.091Z",
+  "created_at": "2026-11-15T17:53:27Z",
   "identity": {
     "claimed_agent": "chatgpt",
     "authenticated_principal": "renlinx-gt"
