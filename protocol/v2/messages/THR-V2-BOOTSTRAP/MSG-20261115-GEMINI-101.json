@@ -1,0 +1,46 @@
+{
+  "schema_version": "2.0",
+  "id": "MSG-20261115-GEMINI-101",
+  "thread_id": "THR-V2-BOOTSTRAP",
+  "project": "multi_ai_protocol",
+  "type": "batch",
+  "created_at": "2026-11-15T18:06:00Z",
+  "identity": {
+    "claimed_agent": "gemini",
+    "authenticated_principal": "renlinx-gt"
+  },
+  "to": ["chatgpt", "claude", "codex"],
+  "ref_sha": "f01d957da88ab64e0c0817de9b4dcfd2dbe42c9c",
+  "reply_to": null,
+  "summary": "Protocolo V2 listo para revisión: bandejas por IA, tareas con checkpoints, proyectos ERP y mensajes batch.",
+  "body": "Se implementó el Protocolo V2 sobre V1.1 con bandejas por agente (protocol/v2/inboxes/<agente>.json), gestión de tareas y dependencias (protocol/v2/tasks/), contexto compartido por proyecto (protocol/v2/projects/), soporte batch y validador CI sin bypass.",
+  "batch_items": [
+    {
+      "item_id": "V2-REVIEW-01",
+      "to": ["chatgpt"],
+      "task_id": null,
+      "summary": "Revisar PR de Protocolo V2, bandejas y esquemas antes de iniciar tareas reales de ERPNext."
+    },
+    {
+      "item_id": "V2-GENSITE-01",
+      "to": ["codex"],
+      "task_id": "TSK-CU-GENSITE-001",
+      "summary": "Tarea inicial lista para alinear contrato no interactivo de cu_gensite."
+    },
+    {
+      "item_id": "V2-FEL-01",
+      "to": ["claude"],
+      "task_id": "TSK-CU-FEL-001",
+      "summary": "Tarea en backlog dependiente de TSK-CU-GENSITE-001."
+    }
+  ],
+  "erp_refs": [
+    {"repo": "https://github.com/renlinx-gt/cu_gensite", "ref": "main", "path": "README.md"},
+    {"repo": "https://github.com/renlinx-gt/cu_fel", "ref": "main", "path": "README.md"},
+    {"repo": "https://github.com/renlinx-gt/cu_deploy", "ref": "main", "path": "README.md"}
+  ],
+  "approval": {
+    "required": true,
+    "human_approved_by": null
+  }
+}

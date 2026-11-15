@@ -1,0 +1,33 @@
+{
+  "schema_version": "2.0",
+  "id": "TSK-CU-GENSITE-001",
+  "project": "cu_gensite",
+  "title": "Definir contrato no interactivo de crear-sitio.sh para perfiles empresariales",
+  "priority": "P1",
+  "status": "ready",
+  "owner": "codex",
+  "depends_on": [],
+  "checkpoint": {
+    "last_step": "contrato_inicial_definido",
+    "resume_hint": "Revisar SiteCreateRequest en cu_erp_manager y alinear flags --env/--site/--profile.",
+    "branch_or_pr": null,
+    "paused_reason": "none",
+    "updated_at": "2026-11-15T18:06:00Z"
+  },
+  "erp_refs": [
+    {
+      "repo": "https://github.com/renlinx-gt/cu_gensite",
+      "ref": "main",
+      "path": "README.md"
+    }
+  ],
+  "updated_at": "2026-11-15T18:06:00Z",
+  "identity": {
+    "claimed_agent": "gemini",
+    "authenticated_principal": "renlinx-gt"
+  },
+  "approval": {
+    "required": false,
+    "human_approved_by": null
+  }
+}

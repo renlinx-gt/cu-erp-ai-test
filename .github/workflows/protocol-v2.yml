@@ -1,0 +1,25 @@
+name: Protocolo V2 Validator
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: protocol-v2-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-v2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ejecutar pruebas unitarias V1.1 y V2
+        run: python3 -m unittest discover -s tools -p 'test_*.py' -v
+
+      - name: Validar V1.1 y V2 (inmutabilidad, feeds y bandejas)
+        run: |
+          python3 tools/validate_v1.py --root . --base-ref "origin/${{ github.base_ref }}" --check-index
+          python3 tools/validate_v2.py --root . --base-ref "origin/${{ github.base_ref }}" --check-index

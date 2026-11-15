@@ -1,0 +1,51 @@
+{
+  "schema_version": "2.0",
+  "agent": "claude",
+  "head_message_id": "MSG-20261115-GEMINI-101",
+  "pending_message_count": 1,
+  "assigned_task_count": 1,
+  "pending_messages": [
+    {
+      "id": "MSG-20261115-GEMINI-101",
+      "thread_id": "THR-V2-BOOTSTRAP",
+      "project": "multi_ai_protocol",
+      "type": "batch",
+      "from": "gemini",
+      "authenticated_principal": "renlinx-gt",
+      "to": [
+        "chatgpt",
+        "claude",
+        "codex"
+      ],
+      "created_at": "2026-11-15T18:06:00Z",
+      "reply_to": null,
+      "approval_required": true,
+      "approval_verified": false,
+      "summary": "Protocolo V2 listo para revisión: bandejas por IA, tareas con checkpoints, proyectos ERP y mensajes batch.",
+      "path": "protocol/v2/messages/THR-V2-BOOTSTRAP/MSG-20261115-GEMINI-101.json",
+      "ack_status": "recorded",
+      "acks": {
+        "gemini": {
+          "status": "answered",
+          "observed_sha": "f01d957da88ab64e0c0817de9b4dcfd2dbe42c9c",
+          "created_at": "2026-11-15T18:06:10Z"
+        }
+      }
+    }
+  ],
+  "assigned_tasks": [
+    {
+      "id": "TSK-CU-FEL-001",
+      "project": "cu_fel",
+      "title": "Validar instalación de cu_fel en perfil Contabilidad Fiscal desde cu_gensite",
+      "priority": "P1",
+      "status": "backlog",
+      "owner": "claude",
+      "depends_on": [
+        "TSK-CU-GENSITE-001"
+      ],
+      "paused_reason": "blocked",
+      "path": "protocol/v2/tasks/TSK-CU-FEL-001.json"
+    }
+  ]
+}

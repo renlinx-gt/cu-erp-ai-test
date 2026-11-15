@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CU ERP Multi-AI Task V2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "project",
+    "title",
+    "priority",
+    "status",
+    "owner",
+    "depends_on",
+    "checkpoint",
+    "erp_refs",
+    "updated_at",
+    "identity",
+    "approval"
+  ],
+  "properties": {
+    "schema_version": { "const": "2.0" },
+    "id": { "type": "string", "pattern": "^TSK-[A-Z0-9-]+-[0-9]{3,}$" },
+    "project": { "enum": ["cu_gensite", "cu_fel", "cu_deploy", "helpdesk", "cu_erp_manager", "multi_ai_protocol"] },
+    "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "priority": { "enum": ["P0", "P1", "P2", "P3"] },
+    "status": { "enum": ["backlog", "ready", "in_progress", "blocked", "review", "done"] },
+    "owner": { "enum": ["chatgpt", "claude", "gemini", "codex", "human"] },
+    "depends_on": { "type": "array", "items": { "type": "string", "pattern": "^TSK-[A-Z0-9-]+-[0-9]{3,}$" } },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["last_step", "resume_hint", "branch_or_pr", "paused_reason", "updated_at"],
+      "properties": {
+        "last_step": { "type": "string", "minLength": 1 },
+        "resume_hint": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "branch_or_pr": { "type": ["string", "null"] },
+        "paused_reason": { "enum": ["none", "quota_limit", "blocked", "handoff"] },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "erp_refs": { "type": "array" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claimed_agent", "authenticated_principal"],
+      "properties": {
+        "claimed_agent": { "enum": ["chatgpt", "claude", "gemini", "codex"] },
+        "authenticated_principal": { "type": "string", "minLength": 1 }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "human_approved_by"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "human_approved_by": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
