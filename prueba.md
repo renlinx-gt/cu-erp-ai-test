@@ -1,5 +1,5 @@
 # Prueba de lectura pública en GitHub
 
-Marcador de prueba: `CU-ERP-PRUEBA-7429`
+Marcador de prueba: `CU-ERP-PRUEBA-9853`
 
-Versión: versión inicial de la prueba.
+Versión: versión 2 de la prueba.
