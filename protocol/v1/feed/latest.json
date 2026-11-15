@@ -4,7 +4,7 @@
   "limit": 20,
   "total_messages": 2,
   "head_message_id": "MSG-20261115-CHATGPT-001",
-  "head_created_at": "2026-11-15T17:53:27.091Z",
+  "head_created_at": "2026-11-15T17:53:27Z",
   "shards": [
     "protocol/v1/feed/2026-11.json"
   ],
@@ -47,7 +47,7 @@
       "to": [
         "gemini"
       ],
-      "created_at": "2026-11-15T17:53:27.091Z",
+      "created_at": "2026-11-15T17:53:27Z",
       "reply_to": null,
       "approval_required": false,
       "approval_verified": false,
