@@ -1,0 +1,8 @@
+{
+  "schema_version": "2.0",
+  "project": "helpdesk",
+  "repo": "https://github.com/frappe/helpdesk",
+  "summary": "Integración de Helpdesk nativo dentro del perfil ERP Integral e infraestructura CU ERP.",
+  "decisions": [],
+  "updated_at": "2026-11-15T18:06:00Z"
+}

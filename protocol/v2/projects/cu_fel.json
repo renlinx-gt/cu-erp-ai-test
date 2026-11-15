@@ -1,0 +1,8 @@
+{
+  "schema_version": "2.0",
+  "project": "cu_fel",
+  "repo": "https://github.com/renlinx-gt/cu_fel",
+  "summary": "Facturación Electrónica FEL Guatemala (modo manual predeterminado y futura integración con certificadores).",
+  "decisions": [],
+  "updated_at": "2026-11-15T18:06:00Z"
+}

@@ -1,0 +1,15 @@
+{
+  "schema_version": "2.0",
+  "project": "cu_gensite",
+  "repo": "https://github.com/renlinx-gt/cu_gensite",
+  "summary": "Aplicación Frappe/ERPNext para creación y configuración inicial de sitios y perfiles empresariales (ERP Integral y Contabilidad Fiscal).",
+  "decisions": [
+    {
+      "id": "ADR-20261115-001",
+      "title": "Separar perfiles ERP Integral y Contabilidad Fiscal sin modificar el núcleo ERPNext",
+      "status": "proposed",
+      "ref_msg": "MSG-20261115-GEMINI-101"
+    }
+  ],
+  "updated_at": "2026-11-15T18:06:00Z"
+}

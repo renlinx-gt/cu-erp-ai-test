@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CU ERP Multi-AI ACK V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "message_id",
+    "observed_sha",
+    "status",
+    "created_at",
+    "identity"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "message_id": { "type": "string", "pattern": "^MSG-[0-9]{8}-[A-Z]+-[0-9]{3,}$" },
+    "observed_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "status": { "enum": ["read", "in_progress", "answered", "deferred_quota"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claimed_agent", "authenticated_principal"],
+      "properties": {
+        "claimed_agent": { "enum": ["chatgpt", "claude", "gemini", "codex"] },
+        "authenticated_principal": { "type": "string", "minLength": 1 }
+      }
+    },
+    "note": { "type": "string", "maxLength": 240 }
+  }
+}

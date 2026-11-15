@@ -1,0 +1,33 @@
+{
+  "schema_version": "2.0",
+  "id": "TSK-CU-FEL-001",
+  "project": "cu_fel",
+  "title": "Validar instalación de cu_fel en perfil Contabilidad Fiscal desde cu_gensite",
+  "priority": "P1",
+  "status": "backlog",
+  "owner": "claude",
+  "depends_on": ["TSK-CU-GENSITE-001"],
+  "checkpoint": {
+    "last_step": "pendiente_dependencia",
+    "resume_hint": "Esperar cierre de TSK-CU-GENSITE-001 antes de validar flujo fiscal.",
+    "branch_or_pr": null,
+    "paused_reason": "blocked",
+    "updated_at": "2026-11-15T18:06:00Z"
+  },
+  "erp_refs": [
+    {
+      "repo": "https://github.com/renlinx-gt/cu_fel",
+      "ref": "main",
+      "path": "README.md"
+    }
+  ],
+  "updated_at": "2026-11-15T18:06:00Z",
+  "identity": {
+    "claimed_agent": "gemini",
+    "authenticated_principal": "renlinx-gt"
+  },
+  "approval": {
+    "required": false,
+    "human_approved_by": null
+  }
+}
