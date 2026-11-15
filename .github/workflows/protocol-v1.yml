@@ -1,0 +1,43 @@
+name: Protocolo V1 Validator & Index
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'protocol/v1/messages/**'
+      - 'protocol/v1/acks/**'
+      - 'protocol/v1/schemas/**'
+      - 'tools/validate_v1.py'
+      - '.github/workflows/protocol-v1.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'protocol/v1/**'
+      - 'tools/validate_v1.py'
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-index:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ejecutar pruebas unitarias del validador
+        run: python3 -m unittest discover -s tools -p 'test_*.py' -v
+
+      - name: Validar mensajes y ACKs V1
+        run: python3 tools/validate_v1.py --root .
+
+      - name: Regenerar protocol/v1/index.json en main
+        if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
+        run: |
+          python3 tools/validate_v1.py --root . --build-index
+          if [ -n "$(git status --porcelain protocol/v1/index.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add protocol/v1/index.json
+            git commit -m "chore(protocol-v1): actualizar index.json"
+            git push
+          fi
