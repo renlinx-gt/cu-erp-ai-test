@@ -1,18 +1,19 @@
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from validate_v1 import ValidationError, build_index_dict, validate_repo
+from validate_v1 import LATEST_FEED_LIMIT, ValidationError, build_feeds, validate_repo
 
 
-def make_msg(msg_id="MSG-20261115-GEMINI-001", thread_id="THR-TEST", hab=None):
+def make_msg(msg_id="MSG-20261115-GEMINI-001", thread_id="THR-TEST", hab=None, created="2026-11-15T17:25:00Z"):
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "id": msg_id,
         "thread_id": thread_id,
         "type": "propuesta",
-        "created_at": "2026-11-15T17:25:00Z",
+        "created_at": created,
         "identity": {
             "claimed_agent": "gemini",
             "authenticated_principal": "renlinx-gt",
@@ -29,39 +30,27 @@ def make_msg(msg_id="MSG-20261115-GEMINI-001", thread_id="THR-TEST", hab=None):
     }
 
 
-class TestProtocolV1(unittest.TestCase):
-    def test_valid_message_and_optional_ack(self):
+def git(root: Path, *args: str) -> str:
+    res = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=True)
+    return res.stdout.strip()
+
+
+class TestProtocolV11(unittest.TestCase):
+    def test_valid_message_ack_and_unverified_approval_flag(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             mdir = root / "protocol" / "v1" / "messages" / "THR-TEST"
             mdir.mkdir(parents=True)
-            (mdir / "MSG-20261115-GEMINI-001.json").write_text(json.dumps(make_msg()), encoding="utf-8")
-
-            # No ACKs yet: ack_status must be unknown (non-blocking)
-            msgs, acks = validate_repo(root)
-            idx = build_index_dict(root, msgs, acks)
-            self.assertEqual(idx["message_count"], 1)
-            self.assertEqual(idx["messages"][0]["ack_status"], "unknown")
-
-            # Add ACK from chatgpt
-            adir = root / "protocol" / "v1" / "acks" / "MSG-20261115-GEMINI-001"
-            adir.mkdir(parents=True)
-            (adir / "chatgpt.json").write_text(json.dumps({
-                "schema_version": "1.0",
-                "message_id": "MSG-20261115-GEMINI-001",
-                "observed_sha": "d96667a171c93dc51570b57cd5d6c6e4e20e44e1",
-                "status": "read",
-                "created_at": "2026-11-15T17:26:00Z",
-                "identity": {
-                    "claimed_agent": "chatgpt",
-                    "authenticated_principal": "renlinx-gt",
-                },
-            }), encoding="utf-8")
+            (mdir / "MSG-20261115-GEMINI-001.json").write_text(
+                json.dumps(make_msg(hab="renlinx-gt")), encoding="utf-8"
+            )
 
             msgs, acks = validate_repo(root)
-            idx = build_index_dict(root, msgs, acks)
-            self.assertEqual(idx["messages"][0]["ack_status"], "recorded")
-            self.assertIn("chatgpt", idx["messages"][0]["acks"])
+            outputs = build_feeds(root, msgs, acks)
+            latest = json.loads(outputs["protocol/v1/feed/latest.json"])
+            self.assertEqual(latest["total_messages"], 1)
+            self.assertFalse(latest["messages"][0]["approval_verified"])
+            self.assertEqual(latest["messages"][0]["ack_status"], "unknown")
 
     def test_rejects_ai_self_approval(self):
         with tempfile.TemporaryDirectory() as td:
@@ -74,19 +63,83 @@ class TestProtocolV1(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 validate_repo(root)
 
-    def test_rejects_broken_reply_to(self):
+    def test_immutability_rejects_message_modify_delete_and_ack_overwrite(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            git(root, "init")
+            git(root, "config", "user.name", "tester")
+            git(root, "config", "user.email", "tester@example.com")
+
+            mdir = root / "protocol" / "v1" / "messages" / "THR-TEST"
+            mdir.mkdir(parents=True)
+            msg_path = mdir / "MSG-20261115-GEMINI-001.json"
+            msg_path.write_text(json.dumps(make_msg()), encoding="utf-8")
+
+            adir = root / "protocol" / "v1" / "acks" / "MSG-20261115-GEMINI-001"
+            adir.mkdir(parents=True)
+            ack_path = adir / "chatgpt.json"
+            ack_path.write_text(json.dumps({
+                "schema_version": "1.1",
+                "message_id": "MSG-20261115-GEMINI-001",
+                "observed_sha": "d96667a171c93dc51570b57cd5d6c6e4e20e44e1",
+                "status": "read",
+                "created_at": "2026-11-15T17:26:00Z",
+                "identity": {"claimed_agent": "chatgpt", "authenticated_principal": "renlinx-gt"},
+            }), encoding="utf-8")
+
+            git(root, "add", ".")
+            git(root, "commit", "-m", "base")
+            base_sha = git(root, "rev-parse", "HEAD")
+
+            # Adding a second message is allowed
+            msg2_path = mdir / "MSG-20261115-CLAUDE-002.json"
+            msg2_path.write_text(json.dumps(make_msg("MSG-20261115-CLAUDE-002")), encoding="utf-8")
+            git(root, "add", ".")
+            git(root, "commit", "-m", "add msg2")
+            validate_repo(root, base_ref=base_sha)
+
+            # Modifying original message must fail
+            m1 = make_msg()
+            m1["body"] = "alterado"
+            msg_path.write_text(json.dumps(m1), encoding="utf-8")
+            git(root, "add", ".")
+            git(root, "commit", "-m", "modify msg1")
+            with self.assertRaises(ValidationError):
+                validate_repo(root, base_ref=base_sha)
+
+            # Reset and test ACK overwrite failure
+            git(root, "reset", "--hard", base_sha)
+            ack_path.write_text(json.dumps({
+                "schema_version": "1.1",
+                "message_id": "MSG-20261115-GEMINI-001",
+                "observed_sha": "d96667a171c93dc51570b57cd5d6c6e4e20e44e1",
+                "status": "answered",
+                "created_at": "2026-11-15T17:30:00Z",
+                "identity": {"claimed_agent": "chatgpt", "authenticated_principal": "renlinx-gt"},
+            }), encoding="utf-8")
+            git(root, "add", ".")
+            git(root, "commit", "-m", "overwrite ack")
+            with self.assertRaises(ValidationError):
+                validate_repo(root, base_ref=base_sha)
+
+    def test_incremental_latest_feed_limit_and_shards(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             mdir = root / "protocol" / "v1" / "messages" / "THR-TEST"
             mdir.mkdir(parents=True)
-            m = make_msg()
-            m["reply_to"] = {
-                "message_id": "MSG-20261115-CLAUDE-999",
-                "ref_sha": "d96667a171c93dc51570b57cd5d6c6e4e20e44e1",
-            }
-            (mdir / "MSG-20261115-GEMINI-001.json").write_text(json.dumps(m), encoding="utf-8")
-            with self.assertRaises(ValidationError):
-                validate_repo(root)
+            total = LATEST_FEED_LIMIT + 5
+            for i in range(1, total + 1):
+                mid = f"MSG-20261115-GEMINI-{i:03d}"
+                ts = f"2026-11-15T17:{i:02d}:00Z"
+                (mdir / f"{mid}.json").write_text(json.dumps(make_msg(mid, created=ts)), encoding="utf-8")
+
+            msgs, acks = validate_repo(root)
+            outputs = build_feeds(root, msgs, acks)
+            latest = json.loads(outputs["protocol/v1/feed/latest.json"])
+            self.assertEqual(latest["total_messages"], total)
+            self.assertEqual(len(latest["messages"]), LATEST_FEED_LIMIT)
+            self.assertEqual(latest["head_message_id"], f"MSG-20261115-GEMINI-{total:03d}")
+            self.assertIn("protocol/v1/feed/2026-11.json", outputs)
 
 
 if __name__ == "__main__":
