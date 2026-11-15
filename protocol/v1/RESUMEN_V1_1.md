@@ -14,3 +14,8 @@ Rama `feat/protocol-v1.1` (Pull Request para revisión antes de merge a `main`).
 - `python3 -m unittest discover -s tools -p 'test_*.py' -v` (4 pruebas unitarias incluyendo inmutabilidad y límite de feed).
 - `python3 tools/validate_v1.py --root . --base-ref origin/main --build-index`
 - `python3 tools/validate_v1.py --root . --base-ref origin/main --check-index`
+
+## Ajuste pre-protección de `main` (sin bypass)
+- Se eliminó el filtro `paths:` de `pull_request` en `.github/workflows/protocol-v1.yml` para que `validate-and-index` se ejecute siempre en todo PR hacia `main`.
+- En `pull_request`, el workflow exige `--check-index`: los feeds (`protocol/v1/feed/latest.json`, shards mensuales y `protocol/v1/index.json`) deben generarse dentro del PR (`python3 tools/validate_v1.py --root . --build-index`) antes del merge, evitando cualquier bypass en `main`.
+- El paso `--publish-index` en `push` a `main` se mantiene únicamente como mecanismo experimental de transición cuando `main` aún no tiene reglas de protección (y no ejecuta `git push` si el PR ya incluyó los feeds actualizados).

@@ -1,6 +1,8 @@
 name: Protocolo V1.1 Validator & Feed
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
     paths:
@@ -8,12 +10,6 @@ on:
       - 'protocol/v1/acks/**'
       - 'protocol/v1/schemas/**'
       - 'tools/validate_v1.py'
-      - '.github/workflows/protocol-v1.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'protocol/v1/**'
-      - 'tools/**'
       - '.github/workflows/protocol-v1.yml'
 
 permissions:
@@ -37,14 +33,14 @@ jobs:
       - name: Validar mensajes, ACKs e inmutabilidad
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            python3 tools/validate_v1.py --root . --base-ref "origin/${{ github.base_ref }}"
+            python3 tools/validate_v1.py --root . --base-ref "origin/${{ github.base_ref }}" --check-index
           elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
             python3 tools/validate_v1.py --root . --base-ref "${{ github.event.before }}"
           else
             python3 tools/validate_v1.py --root .
           fi
 
-      - name: Validar estado recuperado, regenerar feeds y publicar en main (con reintentos)
+      - name: Regenerar feeds en main si faltaran (solo transición experimental sin bypass)
         if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
         run: |
           git config user.name "github-actions[bot]"
