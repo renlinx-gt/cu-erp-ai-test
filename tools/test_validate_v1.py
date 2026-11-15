@@ -144,3 +144,65 @@ class TestProtocolV11(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestConcurrentWrites(unittest.TestCase):
+    def test_concurrent_agent_writes_resolve_without_conflict(self):
+        with tempfile.TemporaryDirectory() as td:
+            base_dir = Path(td)
+            bare = base_dir / "remote.git"
+            subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+
+            seed = base_dir / "seed"
+            subprocess.run(["git", "clone", str(bare), str(seed)], check=True, capture_output=True)
+            git(seed, "checkout", "-b", "main")
+            git(seed, "config", "user.name", "seed")
+            git(seed, "config", "user.email", "seed@example.com")
+            mdir = seed / "protocol" / "v1" / "messages" / "THR-TEST"
+            mdir.mkdir(parents=True)
+            (mdir / "MSG-20261115-GEMINI-001.json").write_text(json.dumps(make_msg()), encoding="utf-8")
+            git(seed, "add", ".")
+            git(seed, "commit", "-m", "seed")
+            git(seed, "push", "-u", "origin", "main")
+            base_sha = git(seed, "rev-parse", "HEAD")
+
+            # Dos agentes clonan el mismo SHA base simultáneamente
+            clone_a = base_dir / "agent_chatgpt"
+            clone_b = base_dir / "agent_claude"
+            subprocess.run(["git", "clone", "--branch", "main", str(bare), str(clone_a)], check=True, capture_output=True)
+            subprocess.run(["git", "clone", "--branch", "main", str(bare), str(clone_b)], check=True, capture_output=True)
+
+            for c, agent in [(clone_a, "chatgpt"), (clone_b, "claude")]:
+                git(c, "config", "user.name", agent)
+                git(c, "config", "user.email", f"{agent}@example.com")
+
+            # Agente A escribe y publica primero
+            m_a = make_msg("MSG-20261115-CHATGPT-002", created="2026-11-15T17:26:00Z")
+            m_a["identity"]["claimed_agent"] = "chatgpt"
+            (clone_a / "protocol" / "v1" / "messages" / "THR-TEST" / "MSG-20261115-CHATGPT-002.json").write_text(
+                json.dumps(m_a), encoding="utf-8"
+            )
+            git(clone_a, "add", ".")
+            git(clone_a, "commit", "-m", "msg chatgpt")
+            git(clone_a, "push", "origin", "main")
+
+            # Agente B escribe desde el mismo SHA base; su push directo debe fallar, pero rebase es limpio
+            m_b = make_msg("MSG-20261115-CLAUDE-003", created="2026-11-15T17:26:05Z")
+            m_b["identity"]["claimed_agent"] = "claude"
+            (clone_b / "protocol" / "v1" / "messages" / "THR-TEST" / "MSG-20261115-CLAUDE-003.json").write_text(
+                json.dumps(m_b), encoding="utf-8"
+            )
+            git(clone_b, "add", ".")
+            git(clone_b, "commit", "-m", "msg claude")
+            failed_push = subprocess.run(["git", "-C", str(clone_b), "push", "origin", "main"], capture_output=True)
+            self.assertNotEqual(failed_push.returncode, 0)
+
+            # Rebase sin conflictos + validación de inmutabilidad + feed consolidado
+            git(clone_b, "pull", "--rebase", "origin", "main")
+            git(clone_b, "push", "origin", "main")
+            msgs, acks = validate_repo(clone_b, base_ref=base_sha)
+            outputs = build_feeds(clone_b, msgs, acks)
+            latest = json.loads(outputs["protocol/v1/feed/latest.json"])
+            self.assertEqual(latest["total_messages"], 3)
+            ids = {m["id"] for m in latest["messages"]}
+            self.assertEqual(ids, {"MSG-20261115-GEMINI-001", "MSG-20261115-CHATGPT-002", "MSG-20261115-CLAUDE-003"})
