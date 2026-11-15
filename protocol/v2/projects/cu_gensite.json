@@ -7,7 +7,7 @@
     {
       "id": "ADR-20261115-001",
       "title": "Separar perfiles ERP Integral y Contabilidad Fiscal sin modificar el núcleo ERPNext",
-      "status": "accepted",
+      "status": "proposed",
       "ref_msg": "MSG-20261115-GEMINI-101"
     }
   ],

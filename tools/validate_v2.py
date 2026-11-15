@@ -237,6 +237,24 @@ def validate_v2(
             if dep not in seen_task_ids:
                 raise ValidationError(f"{path.relative_to(root)}: dependencia inexistente {dep}")
 
+    # Detección de dependencias circulares (DFS 3 colores: 0=no visitado, 1=en curso, 2=cerrado)
+    visit_state: dict[str, int] = {}
+
+    def _dfs_cycle(node: str, trail: list[str]) -> None:
+        state = visit_state.get(node, 0)
+        if state == 1:
+            raise ValidationError("Dependencia circular detectada en tareas: " + " -> ".join(trail + [node]))
+        if state == 2:
+            return
+        visit_state[node] = 1
+        for dep in seen_task_ids[node]["depends_on"]:
+            _dfs_cycle(dep, trail + [node])
+        visit_state[node] = 2
+
+    for tid in sorted(seen_task_ids):
+        if visit_state.get(tid, 0) == 0:
+            _dfs_cycle(tid, [])
+
     projects: list[tuple[Path, dict]] = []
     if proj_dir.exists():
         for path in sorted(proj_dir.glob("*.json")):
@@ -256,6 +274,11 @@ def validate_v2(
                     raise ValidationError(f"{rel}: decisión inválida")
                 if not ADR_ID_RE.match(str(d["id"])) or d["status"] not in ADR_STATUSES:
                     raise ValidationError(f"{rel}: ADR id o status inválido")
+                ref_msg = d["ref_msg"]
+                if d["status"] == "accepted" and not ref_msg:
+                    raise ValidationError(f"{rel}: decisión aceptada ({d['id']}) requiere ref_msg válido")
+                if ref_msg is not None and ref_msg not in seen_msg_ids:
+                    raise ValidationError(f"{rel}: decisión {d['id']} referencia mensaje inexistente {ref_msg}")
             if not ISO_DT_RE.match(str(data["updated_at"])):
                 raise ValidationError(f"{rel}: updated_at inválido")
             projects.append((path, data))
@@ -351,14 +374,28 @@ def build_v2_outputs(
         "message_count": len(entries),
         "task_count": len(task_summaries),
         "project_count": len(projects),
-        "projects": [p["project"] for _, p in projects],
+        "projects": [
+            {
+                "project": p["project"],
+                "decisions": [
+                    {
+                        "id": d["id"],
+                        "status": d["status"],
+                        "ref_msg": d["ref_msg"],
+                        "decision_verified": False,
+                    }
+                    for d in p["decisions"]
+                ],
+            }
+            for _, p in projects
+        ],
         "tasks": task_summaries,
         "messages": latest_entries,
     }, indent=2, ensure_ascii=False) + "\n"
 
     for recipient in sorted(RECIPIENTS):
         pending_msgs = [
-            e for e in latest_entries
+            e for e in entries
             if recipient in e["to"] and recipient not in e["acks"]
         ]
         assigned_tasks = [

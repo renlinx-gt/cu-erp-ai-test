@@ -9,10 +9,29 @@
   "task_count": 2,
   "project_count": 4,
   "projects": [
-    "cu_deploy",
-    "cu_fel",
-    "cu_gensite",
-    "helpdesk"
+    {
+      "project": "cu_deploy",
+      "decisions": []
+    },
+    {
+      "project": "cu_fel",
+      "decisions": []
+    },
+    {
+      "project": "cu_gensite",
+      "decisions": [
+        {
+          "id": "ADR-20261115-001",
+          "status": "proposed",
+          "ref_msg": "MSG-20261115-GEMINI-101",
+          "decision_verified": false
+        }
+      ]
+    },
+    {
+      "project": "helpdesk",
+      "decisions": []
+    }
   ],
   "tasks": [
     {
