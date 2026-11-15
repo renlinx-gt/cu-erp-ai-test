@@ -1,6 +1,8 @@
-name: Protocolo V1 Validator & Index
+name: Protocolo V1.1 Validator & Feed
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
     paths:
@@ -9,35 +11,38 @@ on:
       - 'protocol/v1/schemas/**'
       - 'tools/validate_v1.py'
       - '.github/workflows/protocol-v1.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'protocol/v1/**'
-      - 'tools/validate_v1.py'
 
 permissions:
   contents: write
+
+concurrency:
+  group: protocol-v1-index-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   validate-and-index:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Ejecutar pruebas unitarias del validador
         run: python3 -m unittest discover -s tools -p 'test_*.py' -v
 
-      - name: Validar mensajes y ACKs V1
-        run: python3 tools/validate_v1.py --root .
+      - name: Validar mensajes, ACKs e inmutabilidad
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python3 tools/validate_v1.py --root . --base-ref "origin/${{ github.base_ref }}" --check-index
+          elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            python3 tools/validate_v1.py --root . --base-ref "${{ github.event.before }}"
+          else
+            python3 tools/validate_v1.py --root .
+          fi
 
-      - name: Regenerar protocol/v1/index.json en main
+      - name: Regenerar feeds en main si faltaran (solo transición experimental sin bypass)
         if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
         run: |
-          python3 tools/validate_v1.py --root . --build-index
-          if [ -n "$(git status --porcelain protocol/v1/index.json)" ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add protocol/v1/index.json
-            git commit -m "chore(protocol-v1): actualizar index.json"
-            git push
-          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 tools/validate_v1.py --root . --publish-index --branch main --max-attempts 3

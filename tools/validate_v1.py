@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Validador y generador de índice para el Protocolo Multi-IA V1 (sin dependencias externas)."""
+"""Validador V1.1: inmutabilidad Git, esquemas, separación de aprobación y feeds incrementales."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +14,8 @@ AGENTS = {"chatgpt", "claude", "gemini", "codex"}
 RECIPIENTS = AGENTS | {"human"}
 MSG_TYPES = {"consulta", "propuesta", "revision", "bloqueo", "resumen"}
 ACK_STATUSES = {"read", "in_progress", "answered", "deferred_quota"}
+SCHEMA_VERSIONS = {"1.0", "1.1"}
+LATEST_FEED_LIMIT = 20
 
 MSG_ID_RE = re.compile(r"^MSG-[0-9]{8}-[A-Z]+-[0-9]{3,}$")
 THREAD_ID_RE = re.compile(r"^THR-[A-Z0-9-]+$")
@@ -37,7 +40,36 @@ def _check_identity(obj: object, ctx: str) -> dict:
     return obj
 
 
-def validate_repo(root: Path) -> tuple[list[tuple[Path, dict]], list[tuple[Path, dict]]]:
+def check_immutability(root: Path, base_ref: str) -> None:
+    """Verifica que ningún mensaje ni ACK previo haya sido modificado, renombrado o eliminado."""
+    cmd = [
+        "git", "-C", str(root), "diff", "--name-status", "--no-renames",
+        f"{base_ref}..HEAD", "--", "protocol/v1/messages", "protocol/v1/acks",
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        raise ValidationError(f"Error ejecutando git diff contra {base_ref}: {res.stderr.strip()}")
+
+    violations: list[str] = []
+    for line in res.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t", 1)
+        status = parts[0].strip()
+        path = parts[1].strip() if len(parts) > 1 else ""
+        if status != "A":
+            violations.append(f"{status} {path}")
+    if violations:
+        raise ValidationError(
+            "Violación de inmutabilidad (solo se permiten archivos nuevos 'A' en messages/ y acks/): "
+            + ", ".join(violations)
+        )
+
+
+def validate_repo(root: Path, base_ref: str | None = None) -> tuple[list[tuple[Path, dict]], list[tuple[Path, dict]]]:
+    if base_ref:
+        check_immutability(root, base_ref)
+
     v1_dir = root / "protocol" / "v1"
     msg_dir = v1_dir / "messages"
     ack_dir = v1_dir / "acks"
@@ -59,8 +91,8 @@ def validate_repo(root: Path) -> tuple[list[tuple[Path, dict]], list[tuple[Path,
             }
             if not isinstance(data, dict) or set(data.keys()) != expected_keys:
                 raise ValidationError(f"{rel}: claves inválidas o faltantes")
-            if data["schema_version"] != "1.0":
-                raise ValidationError(f"{rel}: schema_version debe ser '1.0'")
+            if data["schema_version"] not in SCHEMA_VERSIONS:
+                raise ValidationError(f"{rel}: schema_version inválido: {data['schema_version']!r}")
             msg_id = data["id"]
             if not isinstance(msg_id, str) or not MSG_ID_RE.match(msg_id):
                 raise ValidationError(f"{rel}: id inválido: {msg_id!r}")
@@ -121,7 +153,6 @@ def validate_repo(root: Path) -> tuple[list[tuple[Path, dict]], list[tuple[Path,
 
             messages.append((path, data))
 
-    # Validate reply_to references exist
     for path, data in messages:
         if data["reply_to"] is not None:
             parent_id = data["reply_to"]["message_id"]
@@ -141,8 +172,8 @@ def validate_repo(root: Path) -> tuple[list[tuple[Path, dict]], list[tuple[Path,
             allowed_keys = req_keys | {"note"}
             if not isinstance(data, dict) or not req_keys.issubset(data.keys()) or not set(data.keys()).issubset(allowed_keys):
                 raise ValidationError(f"{rel}: claves de ACK inválidas")
-            if data["schema_version"] != "1.0":
-                raise ValidationError(f"{rel}: schema_version debe ser '1.0'")
+            if data["schema_version"] not in SCHEMA_VERSIONS:
+                raise ValidationError(f"{rel}: schema_version inválido")
             msg_id = data["message_id"]
             if msg_id not in seen_ids:
                 raise ValidationError(f"{rel}: ACK referencia mensaje inexistente {msg_id}")
@@ -164,11 +195,34 @@ def validate_repo(root: Path) -> tuple[list[tuple[Path, dict]], list[tuple[Path,
     return messages, acks
 
 
-def build_index_dict(
+def _entry_for_message(root: Path, path: Path, msg: dict, ack_map: dict[str, dict[str, dict]]) -> dict:
+    mid = msg["id"]
+    msg_acks = ack_map.get(mid, {})
+    return {
+        "id": mid,
+        "thread_id": msg["thread_id"],
+        "type": msg["type"],
+        "from": msg["identity"]["claimed_agent"],
+        "authenticated_principal": msg["identity"]["authenticated_principal"],
+        "to": msg["to"],
+        "created_at": msg["created_at"],
+        "reply_to": msg["reply_to"]["message_id"] if msg["reply_to"] else None,
+        "approval_required": msg["approval"]["required"],
+        "approval_verified": False,
+        "approval_verification_note": "La aprobación humana real se verifica únicamente por revisión en PR / Branch Protection, nunca por JSON.",
+        "declared_human_approved_by": msg["approval"]["human_approved_by"],
+        "summary": msg["summary"],
+        "path": path.relative_to(root).as_posix(),
+        "ack_status": "recorded" if msg_acks else "unknown",
+        "acks": msg_acks,
+    }
+
+
+def build_feeds(
     root: Path,
     messages: list[tuple[Path, dict]],
     acks: list[tuple[Path, dict]],
-) -> dict:
+) -> dict[str, str]:
     ack_map: dict[str, dict[str, dict]] = {}
     for _, ack in acks:
         mid = ack["message_id"]
@@ -180,63 +234,151 @@ def build_index_dict(
             "authenticated_principal": ack["identity"]["authenticated_principal"],
         }
 
-    entries = []
-    for path, msg in sorted(messages, key=lambda item: (item[1]["created_at"], item[1]["id"])):
-        mid = msg["id"]
-        msg_acks = ack_map.get(mid, {})
-        entries.append({
-            "id": mid,
-            "thread_id": msg["thread_id"],
-            "type": msg["type"],
-            "from": msg["identity"]["claimed_agent"],
-            "authenticated_principal": msg["identity"]["authenticated_principal"],
-            "to": msg["to"],
-            "created_at": msg["created_at"],
-            "reply_to": msg["reply_to"]["message_id"] if msg["reply_to"] else None,
-            "human_approved_by": msg["approval"]["human_approved_by"],
-            "summary": msg["summary"],
-            "path": path.relative_to(root).as_posix(),
-            "ack_status": "recorded" if msg_acks else "unknown",
-            "acks": msg_acks,
-        })
+    ordered = sorted(messages, key=lambda item: (item[1]["created_at"], item[1]["id"]))
+    entries = [_entry_for_message(root, p, m, ack_map) for p, m in ordered]
 
-    return {
-        "schema_version": "1.0",
+    shards: dict[str, list[dict]] = {}
+    for e in entries:
+        month = e["created_at"][:7]  # YYYY-MM
+        shards.setdefault(month, []).append(e)
+
+    shard_paths = [f"protocol/v1/feed/{m}.json" for m in sorted(shards.keys())]
+    latest_entries = entries[-LATEST_FEED_LIMIT:]
+    head = entries[-1] if entries else None
+
+    outputs: dict[str, str] = {}
+    for month, shard_entries in sorted(shards.items()):
+        outputs[f"protocol/v1/feed/{month}.json"] = json.dumps({
+            "schema_version": "1.1",
+            "shard": month,
+            "message_count": len(shard_entries),
+            "messages": shard_entries,
+        }, indent=2, ensure_ascii=False) + "\n"
+
+    outputs["protocol/v1/feed/latest.json"] = json.dumps({
+        "schema_version": "1.1",
         "generated_by": "tools/validate_v1.py",
+        "limit": LATEST_FEED_LIMIT,
+        "total_messages": len(entries),
+        "head_message_id": head["id"] if head else None,
+        "head_created_at": head["created_at"] if head else None,
+        "shards": shard_paths,
+        "messages": latest_entries,
+    }, indent=2, ensure_ascii=False) + "\n"
+
+    outputs["protocol/v1/index.json"] = json.dumps({
+        "schema_version": "1.1",
+        "generated_by": "tools/validate_v1.py",
+        "latest_feed": "protocol/v1/feed/latest.json",
+        "shards": shard_paths,
         "message_count": len(entries),
-        "messages": entries,
-    }
+        "messages": latest_entries,
+    }, indent=2, ensure_ascii=False) + "\n"
+
+    return outputs
+
+
+def write_outputs(root: Path, outputs: dict[str, str]) -> None:
+    for rel_path, content in outputs.items():
+        out_path = root / rel_path
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(content, encoding="utf-8")
+
+
+def verify_outputs(root: Path, outputs: dict[str, str]) -> None:
+    for rel_path, expected in outputs.items():
+        out_path = root / rel_path
+        if not out_path.exists():
+            raise ValidationError(f"falta {rel_path}")
+        if out_path.read_text(encoding="utf-8") != expected:
+            raise ValidationError(f"{rel_path} desactualizado; ejecute --build-index")
+
+
+def _run_git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        text=True,
+        check=check,
+    )
+
+
+def publish_index_with_retries(
+    root: Path,
+    branch: str = "main",
+    max_attempts: int = 3,
+    before_push_hook=None,
+) -> int:
+    """Recupera origin/<branch>, revalida el estado completo, regenera feeds y hace push con reintentos."""
+    for attempt in range(1, max_attempts + 1):
+        _run_git(root, "fetch", "origin", branch)
+        _run_git(root, "reset", "--hard", f"origin/{branch}")
+
+        # Validar estado recuperado antes de generar feeds
+        messages, acks = validate_repo(root)
+        outputs = build_feeds(root, messages, acks)
+        write_outputs(root, outputs)
+        # Revalidar consistencia antes de publicar
+        verify_outputs(root, outputs)
+        validate_repo(root)
+
+        status = _run_git(root, "status", "--porcelain", "protocol/v1/index.json", "protocol/v1/feed").stdout.strip()
+        if not status:
+            return attempt
+
+        _run_git(root, "add", "protocol/v1/index.json", "protocol/v1/feed")
+        _run_git(root, "commit", "-m", "chore(protocol-v1.1): actualizar feed e index.json")
+
+        if before_push_hook is not None:
+            before_push_hook(attempt)
+
+        push_res = _run_git(root, "push", "origin", branch, check=False)
+        if push_res.returncode == 0:
+            return attempt
+
+    raise ValidationError(f"No se pudo publicar feed/index.json en {branch} tras {max_attempts} intentos")
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Valida Protocolo V1 y genera/verifica index.json")
+    parser = argparse.ArgumentParser(description="Valida Protocolo V1.1 y genera/verifica feeds incrementales")
     parser.add_argument("--root", default=".", help="Raíz del repositorio")
-    parser.add_argument("--build-index", action="store_true", help="Regenerar protocol/v1/index.json")
-    parser.add_argument("--check-index", action="store_true", help="Verificar que index.json coincida")
+    parser.add_argument("--base-ref", default="", help="Ref/SHA base para verificar inmutabilidad de messages/ y acks/")
+    parser.add_argument("--build-index", action="store_true", help="Regenerar index.json y feeds")
+    parser.add_argument("--check-index", action="store_true", help="Verificar que index.json y feeds coincidan")
+    parser.add_argument("--publish-index", action="store_true", help="Recuperar origin/<branch>, revalidar y publicar feeds con reintentos")
+    parser.add_argument("--branch", default="main", help="Rama destino para --publish-index")
+    parser.add_argument("--max-attempts", type=int, default=3, help="Máximo de reintentos para --publish-index")
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
+    if args.publish_index:
+        try:
+            attempts = publish_index_with_retries(root, branch=args.branch, max_attempts=args.max_attempts)
+            print(f"OK: estado revalidado y feeds publicados en {args.branch} (intento {attempts})")
+            return 0
+        except (ValidationError, subprocess.CalledProcessError) as err:
+            print(f"ERROR EN PUBLICACIÓN: {err}", file=sys.stderr)
+            return 1
+
+    base_ref = args.base_ref.strip() or None
     try:
-        messages, acks = validate_repo(root)
+        messages, acks = validate_repo(root, base_ref=base_ref)
     except ValidationError as err:
         print(f"ERROR DE VALIDACIÓN: {err}", file=sys.stderr)
         return 1
 
-    index_path = root / "protocol" / "v1" / "index.json"
-    expected_json = json.dumps(build_index_dict(root, messages, acks), indent=2, ensure_ascii=False) + "\n"
+    outputs = build_feeds(root, messages, acks)
 
     if args.build_index:
-        index_path.write_text(expected_json, encoding="utf-8")
-        print(f"OK: {len(messages)} mensajes y {len(acks)} ACKs validados; índice actualizado en {index_path.relative_to(root)}")
+        write_outputs(root, outputs)
+        print(f"OK: {len(messages)} mensajes y {len(acks)} ACKs validados; feeds e índice actualizados")
         return 0
 
     if args.check_index:
-        if not index_path.exists():
-            print("ERROR: falta protocol/v1/index.json", file=sys.stderr)
-            return 1
-        actual = index_path.read_text(encoding="utf-8")
-        if actual != expected_json:
-            print("ERROR: protocol/v1/index.json desactualizado; ejecute --build-index", file=sys.stderr)
+        try:
+            verify_outputs(root, outputs)
+        except ValidationError as err:
+            print(f"ERROR: {err}", file=sys.stderr)
             return 1
 
     print(f"OK: {len(messages)} mensajes y {len(acks)} ACKs válidos")

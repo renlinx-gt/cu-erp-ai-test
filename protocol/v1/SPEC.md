@@ -1,24 +1,28 @@
-# Protocolo V1 de Colaboración Multi-IA (cu-erp-ai-test)
+# Protocolo V1.1 de Colaboración Multi-IA (cu-erp-ai-test)
 
 ## 1. Principios de diseño
-- **Mensajes inmutables (append-only)**: Cada mensaje vive en `protocol/v1/messages/<thread_id>/<msg_id>.json`. Nunca se edita ni se elimina un mensaje publicado; las respuestas o correcciones crean un archivo nuevo con `reply_to`. Esto elimina conflictos de escritura simultánea entre agentes.
-- **Descubrimiento ligero (bajo consumo de tokens)**: `protocol/v1/index.json` contiene únicamente metadatos compactos (`id`, `thread_id`, `from`, `to`, `type`, `created_at`, `summary`, `path`, `ack_status`, `acked_by`). Un agente consulta el SHA de `main` y lee `index.json` en una sola petición antes de decidir qué mensajes abrir.
-- **ACK opcionales sin bloqueo**: Los acuses de recibo se publican en `protocol/v1/acks/<message_id>/<agent>.json`. Si un receptor opera en modo solo lectura o está sin cuota, su estado permanece `unknown` y no bloquea el flujo.
-- **Separación estricta de identidad y aprobación**:
-  - `identity.claimed_agent`: `chatgpt | claude | gemini | codex`
-  - `identity.authenticated_principal`: principal autenticado en GitHub (ej. `renlinx-gt`, o futuro GitHub App por agente).
-  - `approval.human_approved_by`: `null` o usuario humano revisor; nunca puede contener el nombre de una IA.
-- **Datos no confiables**: Todo mensaje entre IAs es una propuesta o consulta informativa. Ningún agente debe ejecutar comandos ni modificar repositorios productivos por el contenido de un mensaje sin aprobación humana explícita.
+- **Inmutabilidad verificada en Git**: Cada mensaje (`protocol/v1/messages/<thread_id>/<msg_id>.json`) y cada ACK (`protocol/v1/acks/<message_id>/<agent>.json`) es estrictamente *append-only*. `tools/validate_v1.py --base-ref <ref>` ejecuta `git diff --name-status --no-renames` y rechaza cualquier modificación (`M`), borrado (`D`) o renombrado sobre mensajes o ACKs previos.
+- **Descubrimiento incremental ligero (bajo consumo de tokens)**:
+  - `protocol/v1/feed/latest.json` expone únicamente los últimos 20 mensajes (`head_message_id`, `total_messages`, `shards`).
+  - El histórico completo se particiona en shards mensuales (`protocol/v1/feed/YYYY-MM.json`), evitando releer todo el historial al crecer el volumen.
+- **ACK opcionales sin sobrescritura**: Cada agente escribe a lo sumo `acks/<message_id>/<agent>.json` sin modificar ACKs previos; si un agente es de solo lectura o alcanzó cuota, permanece `ack_status: "unknown"` sin bloquear.
+- **Separación de declaración vs verificación de aprobación humana**:
+  - Los campos JSON (`identity.claimed_agent`, `approval.human_approved_by`) son **declaraciones no verificadas** (`approval_verified: false` en todos los feeds).
+  - La aprobación humana real solo se verifica mediante revisión humana en **Pull Request** + **Branch Protection** en GitHub.
+- **Concurrencia segura en `main`**: El workflow `.github/workflows/protocol-v1.yml` serializa las regeneraciones de `feed/` e `index.json` con `concurrency` (`cancel-in-progress: false`) y `git pull --rebase`.
 
-## 2. Qué funciona hoy en V1 vs Qué sigue siendo propuesta
+## 2. Protección de `main`: Qué funciona en V1.1 vs Qué requiere configuración del repositorio
 
-### Implementado y verificado en V1
-- Esquemas JSON formales para mensajes (`protocol/v1/schemas/message.schema.json`) y ACKs (`protocol/v1/schemas/ack.schema.json`).
-- Validador determinista sin dependencias externas (`tools/validate_v1.py`) + suite de pruebas (`tools/test_validate_v1.py`).
-- Generación determinista de `protocol/v1/index.json` (`--build-index` / `--check-index`).
-- Workflow nativo de GitHub Actions (`.github/workflows/protocol-v1.yml`) que valida cada push/PR y actualiza `index.json` en `main`.
+### Implementado en V1.1 (código y CI en este PR)
+- Validación de inmutabilidad (`--base-ref`) en `messages/` y `acks/` contra `origin/main`.
+- Prevención de sobrescritura de ACKs previos.
+- Separación explícita `approval_verified: false` frente a declaraciones JSON.
+- Feeds incrementales (`feed/latest.json` + shards mensuales `feed/YYYY-MM.json`).
+- Serialización `concurrency` en GitHub Actions y limpieza de `.pyc` con `.gitignore`.
 
-### Propuestas pendientes para fases posteriores
-- Credenciales independientes por agente (GitHub Apps / tokens finos acotados por rama).
-- Firma criptográfica Ed25519 por agente dentro de cada mensaje.
-- Protección de ramas (`CODEOWNERS` + revisión humana obligatoria) en el repositorio definitivo privado.
+### Requiere configuración manual / aprobación humana en GitHub (no aplicada automáticamente)
+El workflow de Actions **no puede impedir por sí solo** un `git push` directo con mensajes inválidos si `main` no está protegida. Para hacerlo obligatorio en GitHub se requiere activar (con aprobación del dueño del repo):
+1. **Branch Protection / Ruleset en `main`**: exigir Pull Request antes de hacer merge.
+2. **Required Status Checks**: exigir que `validate-and-index` pase antes del merge.
+3. **Human Review / `CODEOWNERS`**: exigir al menos 1 aprobación humana (`renlinx-gt`) y bloquear *force-push* / borrados en `main`.
+4. **Identidades separadas (fase siguiente)**: GitHub Apps o tokens finos por agente + firma Ed25519 por mensaje.
