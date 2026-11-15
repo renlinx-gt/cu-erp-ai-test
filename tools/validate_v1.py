@@ -278,15 +278,88 @@ def build_feeds(
     return outputs
 
 
+def write_outputs(root: Path, outputs: dict[str, str]) -> None:
+    for rel_path, content in outputs.items():
+        out_path = root / rel_path
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(content, encoding="utf-8")
+
+
+def verify_outputs(root: Path, outputs: dict[str, str]) -> None:
+    for rel_path, expected in outputs.items():
+        out_path = root / rel_path
+        if not out_path.exists():
+            raise ValidationError(f"falta {rel_path}")
+        if out_path.read_text(encoding="utf-8") != expected:
+            raise ValidationError(f"{rel_path} desactualizado; ejecute --build-index")
+
+
+def _run_git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        text=True,
+        check=check,
+    )
+
+
+def publish_index_with_retries(
+    root: Path,
+    branch: str = "main",
+    max_attempts: int = 3,
+    before_push_hook=None,
+) -> int:
+    """Recupera origin/<branch>, revalida el estado completo, regenera feeds y hace push con reintentos."""
+    for attempt in range(1, max_attempts + 1):
+        _run_git(root, "fetch", "origin", branch)
+        _run_git(root, "reset", "--hard", f"origin/{branch}")
+
+        # Validar estado recuperado antes de generar feeds
+        messages, acks = validate_repo(root)
+        outputs = build_feeds(root, messages, acks)
+        write_outputs(root, outputs)
+        # Revalidar consistencia antes de publicar
+        verify_outputs(root, outputs)
+        validate_repo(root)
+
+        status = _run_git(root, "status", "--porcelain", "protocol/v1/index.json", "protocol/v1/feed").stdout.strip()
+        if not status:
+            return attempt
+
+        _run_git(root, "add", "protocol/v1/index.json", "protocol/v1/feed")
+        _run_git(root, "commit", "-m", "chore(protocol-v1.1): actualizar feed e index.json")
+
+        if before_push_hook is not None:
+            before_push_hook(attempt)
+
+        push_res = _run_git(root, "push", "origin", branch, check=False)
+        if push_res.returncode == 0:
+            return attempt
+
+    raise ValidationError(f"No se pudo publicar feed/index.json en {branch} tras {max_attempts} intentos")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Valida Protocolo V1.1 y genera/verifica feeds incrementales")
     parser.add_argument("--root", default=".", help="Raíz del repositorio")
     parser.add_argument("--base-ref", default="", help="Ref/SHA base para verificar inmutabilidad de messages/ y acks/")
     parser.add_argument("--build-index", action="store_true", help="Regenerar index.json y feeds")
     parser.add_argument("--check-index", action="store_true", help="Verificar que index.json y feeds coincidan")
+    parser.add_argument("--publish-index", action="store_true", help="Recuperar origin/<branch>, revalidar y publicar feeds con reintentos")
+    parser.add_argument("--branch", default="main", help="Rama destino para --publish-index")
+    parser.add_argument("--max-attempts", type=int, default=3, help="Máximo de reintentos para --publish-index")
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
+    if args.publish_index:
+        try:
+            attempts = publish_index_with_retries(root, branch=args.branch, max_attempts=args.max_attempts)
+            print(f"OK: estado revalidado y feeds publicados en {args.branch} (intento {attempts})")
+            return 0
+        except (ValidationError, subprocess.CalledProcessError) as err:
+            print(f"ERROR EN PUBLICACIÓN: {err}", file=sys.stderr)
+            return 1
+
     base_ref = args.base_ref.strip() or None
     try:
         messages, acks = validate_repo(root, base_ref=base_ref)
@@ -297,22 +370,16 @@ def main(argv: list[str] | None = None) -> int:
     outputs = build_feeds(root, messages, acks)
 
     if args.build_index:
-        for rel_path, content in outputs.items():
-            out_path = root / rel_path
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(content, encoding="utf-8")
+        write_outputs(root, outputs)
         print(f"OK: {len(messages)} mensajes y {len(acks)} ACKs validados; feeds e índice actualizados")
         return 0
 
     if args.check_index:
-        for rel_path, expected in outputs.items():
-            out_path = root / rel_path
-            if not out_path.exists():
-                print(f"ERROR: falta {rel_path}", file=sys.stderr)
-                return 1
-            if out_path.read_text(encoding="utf-8") != expected:
-                print(f"ERROR: {rel_path} desactualizado; ejecute --build-index", file=sys.stderr)
-                return 1
+        try:
+            verify_outputs(root, outputs)
+        except ValidationError as err:
+            print(f"ERROR: {err}", file=sys.stderr)
+            return 1
 
     print(f"OK: {len(messages)} mensajes y {len(acks)} ACKs válidos")
     return 0

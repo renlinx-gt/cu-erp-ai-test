@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from validate_v1 import LATEST_FEED_LIMIT, ValidationError, build_feeds, validate_repo
+from validate_v1 import LATEST_FEED_LIMIT, ValidationError, build_feeds, publish_index_with_retries, validate_repo
 
 
 def make_msg(msg_id="MSG-20261115-GEMINI-001", thread_id="THR-TEST", hab=None, created="2026-11-15T17:25:00Z"):
@@ -206,3 +206,90 @@ class TestConcurrentWrites(unittest.TestCase):
             self.assertEqual(latest["total_messages"], 3)
             ids = {m["id"] for m in latest["messages"]}
             self.assertEqual(ids, {"MSG-20261115-GEMINI-001", "MSG-20261115-CHATGPT-002", "MSG-20261115-CLAUDE-003"})
+
+
+class TestPublishRetries(unittest.TestCase):
+    def test_publish_retries_revalidates_and_recovers_after_concurrent_push(self):
+        with tempfile.TemporaryDirectory() as td:
+            base_dir = Path(td)
+            bare = base_dir / "remote.git"
+            subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+
+            seed = base_dir / "seed"
+            subprocess.run(["git", "clone", str(bare), str(seed)], check=True, capture_output=True)
+            git(seed, "checkout", "-b", "main")
+            git(seed, "config", "user.name", "seed")
+            git(seed, "config", "user.email", "seed@example.com")
+            mdir = seed / "protocol" / "v1" / "messages" / "THR-TEST"
+            mdir.mkdir(parents=True)
+            (mdir / "MSG-20261115-GEMINI-001.json").write_text(json.dumps(make_msg()), encoding="utf-8")
+            git(seed, "add", ".")
+            git(seed, "commit", "-m", "seed")
+            git(seed, "push", "-u", "origin", "main")
+
+            ci_clone = base_dir / "ci"
+            other_clone = base_dir / "other"
+            subprocess.run(["git", "clone", "--branch", "main", str(bare), str(ci_clone)], check=True, capture_output=True)
+            subprocess.run(["git", "clone", "--branch", "main", str(bare), str(other_clone)], check=True, capture_output=True)
+            for c, name in [(ci_clone, "github-actions"), (other_clone, "chatgpt")]:
+                git(c, "config", "user.name", name)
+                git(c, "config", "user.email", f"{name}@example.com")
+
+            def inject_concurrent_push(attempt: int) -> None:
+                if attempt == 1:
+                    m2 = make_msg("MSG-20261115-CHATGPT-002", created="2026-11-15T17:26:00Z")
+                    m2["identity"]["claimed_agent"] = "chatgpt"
+                    (other_clone / "protocol" / "v1" / "messages" / "THR-TEST" / "MSG-20261115-CHATGPT-002.json").write_text(
+                        json.dumps(m2), encoding="utf-8"
+                    )
+                    git(other_clone, "add", ".")
+                    git(other_clone, "commit", "-m", "concurrent msg2")
+                    git(other_clone, "push", "origin", "main")
+
+            attempts = publish_index_with_retries(
+                ci_clone, branch="main", max_attempts=3, before_push_hook=inject_concurrent_push
+            )
+            self.assertEqual(attempts, 2)
+            latest = json.loads((ci_clone / "protocol" / "v1" / "feed" / "latest.json").read_text(encoding="utf-8"))
+            self.assertEqual(latest["total_messages"], 2)
+
+    def test_publish_retries_rejects_invalid_recovered_state(self):
+        with tempfile.TemporaryDirectory() as td:
+            base_dir = Path(td)
+            bare = base_dir / "remote.git"
+            subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+
+            seed = base_dir / "seed"
+            subprocess.run(["git", "clone", str(bare), str(seed)], check=True, capture_output=True)
+            git(seed, "checkout", "-b", "main")
+            git(seed, "config", "user.name", "seed")
+            git(seed, "config", "user.email", "seed@example.com")
+            mdir = seed / "protocol" / "v1" / "messages" / "THR-TEST"
+            mdir.mkdir(parents=True)
+            (mdir / "MSG-20261115-GEMINI-001.json").write_text(json.dumps(make_msg()), encoding="utf-8")
+            git(seed, "add", ".")
+            git(seed, "commit", "-m", "seed")
+            git(seed, "push", "-u", "origin", "main")
+
+            ci_clone = base_dir / "ci"
+            other_clone = base_dir / "other"
+            subprocess.run(["git", "clone", "--branch", "main", str(bare), str(ci_clone)], check=True, capture_output=True)
+            subprocess.run(["git", "clone", "--branch", "main", str(bare), str(other_clone)], check=True, capture_output=True)
+            for c, name in [(ci_clone, "github-actions"), (other_clone, "bad-agent")]:
+                git(c, "config", "user.name", name)
+                git(c, "config", "user.email", f"{name}@example.com")
+
+            def inject_invalid_push(attempt: int) -> None:
+                if attempt == 1:
+                    bad = make_msg("MSG-20261115-CHATGPT-002", hab="chatgpt")
+                    (other_clone / "protocol" / "v1" / "messages" / "THR-TEST" / "MSG-20261115-CHATGPT-002.json").write_text(
+                        json.dumps(bad), encoding="utf-8"
+                    )
+                    git(other_clone, "add", ".")
+                    git(other_clone, "commit", "-m", "invalid concurrent msg")
+                    git(other_clone, "push", "origin", "main")
+
+            with self.assertRaises(ValidationError):
+                publish_index_with_retries(
+                    ci_clone, branch="main", max_attempts=3, before_push_hook=inject_invalid_push
+                )
